@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Cuban Dominoes</title>
+    <style>
+        :root {
+            --felt: #1a472a;
+            --tile-bg: #f5f5dc;
+            --tile-dot: #111;
+            --highlight: #ffd700;
+            --team1-color: #4da6ff; /* Blue */
+            --team2-color: #ff6666; /* Red */
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: var(--felt);
+            color: white;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        /* NEW: Scoreboard Layout */
+        #header {
+            text-align: center;
+            background: rgba(0,0,0,0.5);
+            padding: 10px;
+        }
+
+        #scoreboard {
+            display: flex;
+            justify-content: center;
+            gap: 20px;
+            font-size: 18px;
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+
+        .t1-box {
+            color: var(--team1-color);
+        }
+
+        .t2-box {
+            color: var(--team2-color);
+        }
+
+        #board-container {
+            flex-grow: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow-x: auto;
+            padding: 20px;
+            box-sizing: border-box;
+            position: relative; /* For modal overlay */
+        }
+
+        #the-board {
+            display: flex;
+            gap: 4px;
+            align-items: center;
+        }
+
+        #hand-container {
+            height: 120px;
+            background: rgba(0,0,0,0.7);
+            display: flex;
+            gap: 10px;
+            padding: 10px;
+            overflow-x: auto;
+            align-items: center;
+        }
+
+        .domino {
+            background-color: var(--tile-bg);
+            border-radius: 8px;
+            box-shadow: 2px 2px 5px rgba(0,0,0,0.5);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            user-select: none;
+            flex-shrink: 0;
+        }
+
+            .domino.vertical {
+                width: 50px;
+                height: 100px;
+            }
+
+            .domino.horizontal {
+                flex-direction: row;
+                width: 100px;
+                height: 50px;
+            }
+
+        .divider {
+            background-color: #333;
+        }
+
+        .vertical .divider {
+            width: 80%;
+            height: 2px;
+            margin: 5px 0;
+        }
+
+        .horizontal .divider {
+            height: 80%;
+            width: 2px;
+            margin: 0 5px;
+        }
+
+        .pip-face {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            grid-template-rows: repeat(3, 1fr);
+            width: 100%;
+            height: 100%;
+            padding: 5px;
+            box-sizing: border-box;
+        }
+
+        .dot {
+            width: 8px;
+            height: 8px;
+            background-color: var(--tile-dot);
+            border-radius: 50%;
+            justify-self: center;
+            align-self: center;
+        }
+
+        .playable {
+            border: 3px solid var(--highlight);
+            transform: translateY(-5px);
+            transition: transform 0.2s;
+        }
+
+        button {
+            padding: 8px 16px;
+            background-color: var(--highlight);
+            border: none;
+            border-radius: 5px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+
+        /* NEW: Round Over Overlay Modal */
+        #round-modal {
+            display: none;
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background-color: rgba(0, 0, 0, 0.9);
+            padding: 30px;
+            border-radius: 10px;
+            text-align: center;
+            border: 2px solid white;
+            z-index: 100;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="header">
+        <div id="scoreboard">
+            <span class="t1-box">Team 1 (P0, P2): <span id="score-t1">0</span></span>
+            <span style="color:white;">|</span>
+            <span class="t2-box">Team 2 (P1, P3): <span id="score-t2">0</span></span>
+        </div>
+        <div id="status-text">Connecting...</div>
+        <button id="pass-btn" style="display: none; margin-top:5px;" onclick="passTurn()">Pass (Knock)</button>
+    </div>
+
+    <div id="board-container">
+        <div id="the-board"></div>
+
+        <div id="round-modal">
+            <h2 id="modal-title">Round Over!</h2>
+            <p id="modal-msg" style="font-size: 18px; margin-bottom: 20px; white-space: pre-line;"></p>
+            <button id="next-round-btn" onclick="requestNextRound()">Deal Next Hand</button>
+        </div>
+    </div>
+
+    <div id="hand-container"></div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        const socket = io();
+        let myPlayerIndex = null;
+        let myHand = [];
+        let isMyTurn = false;
+        let currentBoard = [];
+        let boardEnds = { head: null, tail: null };
+
+        const dotPatterns = {
+            0: [], 1: [5], 2: [1, 9], 3: [1, 5, 9], 4: [1, 3, 7, 9],
+            5: [1, 3, 5, 7, 9], 6: [1, 3, 4, 6, 7, 9], 7: [1, 3, 4, 5, 6, 7, 9],
+            8: [1, 2, 3, 4, 6, 7, 8, 9], 9: [1, 2, 3, 4, 5, 6, 7, 8, 9]
+        };
+
+        socket.on('game_update', (state) => {
+            myPlayerIndex = state.playerIndex;
+            myHand = state.hand;
+            isMyTurn = (state.currentTurn === myPlayerIndex);
+            currentBoard = state.board;
+
+            if (currentBoard.length > 0) {
+                boardEnds.head = currentBoard[0][0];
+                boardEnds.tail = currentBoard[currentBoard.length - 1][1];
+            }
+
+            // Update Scoreboard UI
+            document.getElementById('score-t1').innerText = state.scores.team1;
+            document.getElementById('score-t2').innerText = state.scores.team2;
+
+            // Determine My Team Color
+            const myTeamClass = (myPlayerIndex === 0 || myPlayerIndex === 2) ? "t1-box" : "t2-box";
+            const myTeamNum = (myPlayerIndex === 0 || myPlayerIndex === 2) ? 1 : 2;
+
+            const statusText = document.getElementById('status-text');
+            const passBtn = document.getElementById('pass-btn');
+            const modal = document.getElementById('round-modal');
+
+            // Handle Round/Match Over states
+            if (state.matchWinner) {
+                modal.style.display = 'block';
+                document.getElementById('modal-title').innerText = "🏆 GAME OVER 🏆";
+                document.getElementById('modal-msg').innerText = state.matchWinner + "\n(Loser reached 200 points)";
+                document.getElementById('next-round-btn').style.display = 'none'; // Lock game
+                passBtn.style.display = "none";
+                statusText.innerText = "Match Concluded.";
+            } else if (state.isRoundOver) {
+                modal.style.display = 'block';
+                document.getElementById('modal-title').innerText = "Round Over!";
+                document.getElementById('modal-msg').innerText = state.roundMessage;
+                passBtn.style.display = "none";
+                statusText.innerText = "Waiting for next round...";
+            } else {
+                modal.style.display = 'none'; // Hide modal during normal play
+
+                if (isMyTurn) {
+                    statusText.innerHTML = `You are Player ${myPlayerIndex} (<span class="${myTeamClass}">Team ${myTeamNum}</span>) - YOUR TURN!`;
+                    passBtn.style.display = "inline-block";
+                } else {
+                    statusText.innerHTML = `You are Player ${myPlayerIndex} (<span class="${myTeamClass}">Team ${myTeamNum}</span>) - Waiting for Player ${state.currentTurn}...`;
+                    passBtn.style.display = "none";
+                }
+            }
+
+            renderHand();
+            renderBoard(currentBoard);
+        });
+
+        socket.on('error_msg', (msg) => { alert(msg); });
+
+        function renderHand() {
+            const handContainer = document.getElementById('hand-container');
+            handContainer.innerHTML = '';
+
+            myHand.forEach((tile, index) => {
+                const dominoEl = createDominoElement(tile, 'vertical');
+                if (isMyTurn) dominoEl.classList.add('playable');
+
+                dominoEl.onclick = () => {
+                    if (!isMyTurn) return;
+                    if (currentBoard.length === 0) {
+                        socket.emit('play_tile', { playerIndex: myPlayerIndex, tileIndex: index, target: 'tail' });
+                        return;
+                    }
+
+                    const [a, b] = tile;
+                    const matchesHead = (a === boardEnds.head || b === boardEnds.head);
+                    const matchesTail = (a === boardEnds.tail || b === boardEnds.tail);
+
+                    if (matchesHead && matchesTail) {
+                        const playOnHead = confirm("This tile matches BOTH sides!\n\nClick OK to play on the LEFT (Head).\nClick Cancel to play on the RIGHT (Tail).");
+                        const targetEnd = playOnHead ? 'head' : 'tail';
+                        socket.emit('play_tile', { playerIndex: myPlayerIndex, tileIndex: index, target: targetEnd });
+                    } else if (matchesHead) {
+                        socket.emit('play_tile', { playerIndex: myPlayerIndex, tileIndex: index, target: 'head' });
+                    } else if (matchesTail) {
+                        socket.emit('play_tile', { playerIndex: myPlayerIndex, tileIndex: index, target: 'tail' });
+                    }
+                };
+                handContainer.appendChild(dominoEl);
+            });
+        }
+
+        function renderBoard(boardTiles) {
+            const boardContainer = document.getElementById('the-board');
+            boardContainer.innerHTML = '';
+            boardTiles.forEach(tile => {
+                boardContainer.appendChild(createDominoElement(tile, 'horizontal'));
+            });
+        }
+
+        function createDominoElement(tile, orientation = 'vertical') {
+            const div = document.createElement('div');
+            div.className = `domino ${orientation}`;
+            function createPipFace(num) {
+                const face = document.createElement('div');
+                face.className = 'pip-face';
+                dotPatterns[num].forEach(pos => {
+                    const dot = document.createElement('div');
+                    dot.className = 'dot';
+                    const row = Math.ceil(pos / 3);
+                    const col = ((pos - 1) % 3) + 1;
+                    dot.style.gridArea = `${row} / ${col}`;
+                    face.appendChild(dot);
+                });
+                return face;
+            }
+            div.appendChild(createPipFace(tile[0]));
+            div.appendChild(Object.assign(document.createElement('div'), { className: 'divider' }));
+            div.appendChild(createPipFace(tile[1]));
+            return div;
+        }
+
+        function passTurn() {
+            if (isMyTurn) socket.emit('pass_turn', { playerIndex: myPlayerIndex });
+        }
+
+        // NEW: Tell the server to start the next game
+        function requestNextRound() {
+            socket.emit('next_round');
+        }
+    </script>
+</body>
+</html>
