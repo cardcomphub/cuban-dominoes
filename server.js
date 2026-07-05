@@ -1,28 +1,33 @@
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
+const { createClient } = require('@supabase/supabase-js');
 const DominoGame = require('./DominoGame');
 
 const app = express();
 const server = http.createServer(app);
 
-// Enable CORS so the mobile app can connect to the server
-const io = new Server(server, {
-    cors: { origin: "*" }
-});
+// --- SUPABASE BACKEND SETUP ---
+// The server uses environment variables to keep the master key out of GitHub
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-// Serve the 'www' folder we created for Capacitor
+// Only initialize if keys are present (prevents crashes if running locally without them)
+const supabase = (supabaseUrl && supabaseServiceKey)
+    ? createClient(supabaseUrl, supabaseServiceKey)
+    : null;
+
+// Enable CORS so the mobile app can connect
+const io = new Server(server, { cors: { origin: "*" } });
+
 app.use(express.static('www'));
 app.get('/', (req, res) => {
     res.sendFile(__dirname + '/www/index.html');
 });
 
-// MULTI-ROOM STATE MANAGEMENT
-// Maps a 5-letter room code to a specific game instance and player list
 const activeRooms = {};
 
 function generateRoomCode() {
-    // Generates a random 5-character string (e.g., "A7K9P")
     return Math.random().toString(36).substring(2, 7).toUpperCase();
 }
 
@@ -30,7 +35,6 @@ function broadcastRoomState(roomCode) {
     const room = activeRooms[roomCode];
     if (!room) return;
 
-    // Send a customized payload to each player currently in THIS specific room
     room.players.forEach((player, index) => {
         if (player) {
             io.to(player.id).emit('game_update', {
@@ -42,67 +46,106 @@ function broadcastRoomState(roomCode) {
                 isRoundOver: room.game.isRoundOver,
                 roundMessage: room.game.roundMessage,
                 matchWinner: room.game.matchWinner,
-                roomCode: roomCode, // Sends the code to the frontend UI
-                playersReady: room.players.length // Tracks how full the lobby is
+                roomCode: roomCode,
+                playersReady: room.players.length
             });
         }
     });
 }
 
+// --- DATABASE SAVING LOGIC ---
+async function saveMatchData(roomCode, room) {
+    if (!supabase) {
+        console.log("⚠️ Database keys missing. Skipping match save.");
+        return;
+    }
+
+    try {
+        // In Cuban Dominoes, if Team 1 has >= 200 points, they lost. So Team 2 wins.
+        const winnerTeam = room.game.scores.team1 >= 200 ? 2 : 1;
+
+        // 1. Log the Match
+        const { data: matchData, error: matchError } = await supabase
+            .from('matches')
+            .insert([{
+                room_code: roomCode,
+                team1_score: room.game.scores.team1,
+                team2_score: room.game.scores.team2,
+                winner_team: winnerTeam
+            }])
+            .select()
+            .single();
+
+        if (matchError) throw matchError;
+
+        // 2. Log the Players mapped to this match
+        const playersToInsert = room.players.map((player, index) => {
+            return {
+                match_id: matchData.id,
+                profile_id: player.userId || null, // Associates the DB row with their Supabase Auth ID
+                team_number: (index === 0 || index === 2) ? 1 : 2,
+                player_index: index
+            };
+        });
+
+        const { error: playersError } = await supabase
+            .from('match_players')
+            .insert(playersToInsert);
+
+        if (playersError) throw playersError;
+
+        console.log(`✅ Match ${roomCode} saved successfully to PostgreSQL!`);
+    } catch (err) {
+        console.error("❌ Error saving match:", err);
+    }
+}
+
 io.on('connection', (socket) => {
-    console.log(`🟢 New connection established: ${socket.id}`);
+    console.log(`🟢 New connection: ${socket.id}`);
+
+    // --- AUTHENTICATION HANDLER ---
+    // When the frontend confirms a Google login, tag this socket with their UUID
+    socket.on('player_authenticated', (data) => {
+        socket.userId = data.userId;
+        console.log(`👤 Socket ${socket.id} authenticated as user ${data.userId}`);
+    });
 
     // --- LOBBY SYSTEM ---
-
-    // 1. Create a brand new private room
     socket.on('create_room', () => {
         const roomCode = generateRoomCode();
 
-        // Initialize a brand new game instance for this room
         activeRooms[roomCode] = {
             game: new DominoGame(),
-            players: [{ id: socket.id }] // The creator is Player 0
+            players: [{ id: socket.id, userId: socket.userId }], // Store their UUID!
+            matchSaved: false
         };
 
-        socket.roomCode = roomCode; // Tag the socket so we remember where they are
-        socket.join(roomCode); // Add them to the isolated Socket.io channel
-
-        console.log(`🏠 Room created: ${roomCode} by ${socket.id}`);
-
+        socket.roomCode = roomCode;
+        socket.join(roomCode);
         socket.emit('room_joined', { roomCode, playerIndex: 0 });
         broadcastRoomState(roomCode);
     });
 
-    // 2. Join an existing room via 5-letter code
     socket.on('join_room', (roomCode) => {
         roomCode = roomCode.toUpperCase();
         const room = activeRooms[roomCode];
 
-        if (!room) {
-            socket.emit('error_msg', 'Room not found! Check the code and try again.');
-            return;
-        }
-
-        if (room.players.length >= 4) {
-            socket.emit('error_msg', 'Game is full! Maximum 4 players allowed.');
-            return;
-        }
+        if (!room) return socket.emit('error_msg', 'Room not found!');
+        if (room.players.length >= 4) return socket.emit('error_msg', 'Game is full!');
 
         const playerIndex = room.players.length;
-        room.players.push({ id: socket.id });
+
+        // Store their UUID when they sit at the table
+        room.players.push({ id: socket.id, userId: socket.userId });
 
         socket.roomCode = roomCode;
         socket.join(roomCode);
-
-        console.log(`👋 ${socket.id} joined room ${roomCode} as Player ${playerIndex}`);
 
         socket.emit('room_joined', { roomCode, playerIndex });
         broadcastRoomState(roomCode);
     });
 
     // --- GAMEPLAY EVENTS ---
-    // Notice how these now check `socket.roomCode` before doing anything!
-
     socket.on('play_tile', (data) => {
         const roomCode = socket.roomCode;
         if (!roomCode || !activeRooms[roomCode]) return;
@@ -113,6 +156,12 @@ io.on('connection', (socket) => {
         let success = room.game.playTile(playerIndex, tileIndex, target);
         if (success) {
             broadcastRoomState(roomCode);
+
+            // CHECK FOR MATCH END
+            if (room.game.matchWinner && !room.matchSaved) {
+                room.matchSaved = true; // Prevents saving the same match twice
+                saveMatchData(roomCode, room);
+            }
         } else {
             socket.emit('error_msg', 'That tile does not match the board!');
         }
@@ -122,14 +171,11 @@ io.on('connection', (socket) => {
         const roomCode = socket.roomCode;
         if (!roomCode || !activeRooms[roomCode]) return;
 
-        const room = activeRooms[roomCode];
-        const { playerIndex } = data;
-
-        let success = room.game.passTurn(playerIndex);
+        let success = activeRooms[roomCode].game.passTurn(data.playerIndex);
         if (success) {
             broadcastRoomState(roomCode);
         } else {
-            socket.emit('error_msg', 'Illegal move! You have a playable tile and cannot pass.');
+            socket.emit('error_msg', 'Illegal move! You have a playable tile.');
         }
     });
 
@@ -144,21 +190,16 @@ io.on('connection', (socket) => {
         }
     });
 
-    // --- DISCONNECT HANDLING ---
     socket.on('disconnect', () => {
         console.log(`🔴 Player disconnected: ${socket.id}`);
         const roomCode = socket.roomCode;
 
         if (roomCode && activeRooms[roomCode]) {
             const room = activeRooms[roomCode];
-
-            // Filter the player out of the room array
             room.players = room.players.filter(p => p.id !== socket.id);
 
-            // Clean up memory: if the room is totally empty, delete the game!
             if (room.players.length === 0) {
                 delete activeRooms[roomCode];
-                console.log(`🗑️ Room ${roomCode} destroyed (empty).`);
             } else {
                 io.to(roomCode).emit('error_msg', 'A player disconnected. The game may be paused.');
             }
@@ -166,7 +207,6 @@ io.on('connection', (socket) => {
     });
 });
 
-// Start the server
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 Live Server running on port ${PORT}`);

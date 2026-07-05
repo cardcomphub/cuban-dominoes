@@ -16,6 +16,7 @@
     <PackageJsonDependenciesCapacitorCli Condition="$(PackageJsonDependenciesCapacitorCli) == ''">^8.4.1</PackageJsonDependenciesCapacitorCli>
     <PackageJsonDependenciesCapacitorCore Condition="$(PackageJsonDependenciesCapacitorCore) == ''">^8.4.1</PackageJsonDependenciesCapacitorCore>
     <PackageJsonDependenciesCapacitorIos Condition="$(PackageJsonDependenciesCapacitorIos) == ''">^8.4.1</PackageJsonDependenciesCapacitorIos>
+    <PackageJsonDependenciesSupabaseSupabaseJs Condition="$(PackageJsonDependenciesSupabaseSupabaseJs) == ''">^2.110.0</PackageJsonDependenciesSupabaseSupabaseJs>
     <PackageJsonDependenciesExpress Condition="$(PackageJsonDependenciesExpress) == ''">^5.2.1</PackageJsonDependenciesExpress>
     <PackageJsonDependenciesSocketIo Condition="$(PackageJsonDependenciesSocketIo) == ''">^4.8.3</PackageJsonDependenciesSocketIo>
   </PropertyGroup>
