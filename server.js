@@ -76,6 +76,8 @@ io.on('connection', (socket) => {
 
 // 4. Start Broadcasting
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
+
+// Adding '0.0.0.0' tells the cloud host to accept outside internet traffic
+server.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 Live Server running on port ${PORT}`);
 });
