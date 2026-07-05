@@ -10,8 +10,8 @@
             --tile-bg: #f5f5dc;
             --tile-dot: #111;
             --highlight: #ffd700;
-            --team1-color: #4da6ff; /* Blue */
-            --team2-color: #ff6666; /* Red */
+            --team1-color: #4da6ff;
+            --team2-color: #ff6666;
         }
 
         body {
@@ -26,11 +26,11 @@
             overflow: hidden;
         }
 
-        /* NEW: Scoreboard Layout */
         #header {
             text-align: center;
             background: rgba(0,0,0,0.5);
             padding: 10px;
+            flex-shrink: 0;
         }
 
         #scoreboard {
@@ -52,23 +52,24 @@
 
         #board-container {
             flex-grow: 1;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            overflow-x: auto;
+            min-height: 0;
+            display: block;
+            overflow: auto;
             padding: 20px;
             box-sizing: border-box;
-            position: relative; /* For modal overlay */
+            position: relative;
         }
 
         #the-board {
-            display: flex;
-            gap: 4px;
-            align-items: center;
+            position: relative;
+            width: 100%;
+            height: 100%;
+            margin: 0;
         }
 
         #hand-container {
             height: 120px;
+            flex-shrink: 0;
             background: rgba(0,0,0,0.7);
             display: flex;
             gap: 10px;
@@ -100,6 +101,12 @@
                 width: 100px;
                 height: 50px;
             }
+
+                .domino.horizontal.double-tile {
+                    flex-direction: column;
+                    width: 50px;
+                    height: 100px;
+                }
 
         .divider {
             background-color: #333;
@@ -151,10 +158,9 @@
             cursor: pointer;
         }
 
-        /* NEW: Round Over Overlay Modal */
         #round-modal {
             display: none;
-            position: absolute;
+            position: fixed;
             top: 50%;
             left: 50%;
             transform: translate(-50%, -50%);
@@ -181,12 +187,12 @@
 
     <div id="board-container">
         <div id="the-board"></div>
+    </div>
 
-        <div id="round-modal">
-            <h2 id="modal-title">Round Over!</h2>
-            <p id="modal-msg" style="font-size: 18px; margin-bottom: 20px; white-space: pre-line;"></p>
-            <button id="next-round-btn" onclick="requestNextRound()">Deal Next Hand</button>
-        </div>
+    <div id="round-modal">
+        <h2 id="modal-title">Round Over!</h2>
+        <p id="modal-msg" style="font-size: 18px; margin-bottom: 20px; white-space: pre-line;"></p>
+        <button id="next-round-btn" onclick="requestNextRound()">Deal Next Hand</button>
     </div>
 
     <div id="hand-container"></div>
@@ -217,11 +223,9 @@
                 boardEnds.tail = currentBoard[currentBoard.length - 1][1];
             }
 
-            // Update Scoreboard UI
             document.getElementById('score-t1').innerText = state.scores.team1;
             document.getElementById('score-t2').innerText = state.scores.team2;
 
-            // Determine My Team Color
             const myTeamClass = (myPlayerIndex === 0 || myPlayerIndex === 2) ? "t1-box" : "t2-box";
             const myTeamNum = (myPlayerIndex === 0 || myPlayerIndex === 2) ? 1 : 2;
 
@@ -229,12 +233,11 @@
             const passBtn = document.getElementById('pass-btn');
             const modal = document.getElementById('round-modal');
 
-            // Handle Round/Match Over states
             if (state.matchWinner) {
                 modal.style.display = 'block';
                 document.getElementById('modal-title').innerText = "🏆 GAME OVER 🏆";
                 document.getElementById('modal-msg').innerText = state.matchWinner + "\n(Loser reached 200 points)";
-                document.getElementById('next-round-btn').style.display = 'none'; // Lock game
+                document.getElementById('next-round-btn').style.display = 'none';
                 passBtn.style.display = "none";
                 statusText.innerText = "Match Concluded.";
             } else if (state.isRoundOver) {
@@ -244,8 +247,7 @@
                 passBtn.style.display = "none";
                 statusText.innerText = "Waiting for next round...";
             } else {
-                modal.style.display = 'none'; // Hide modal during normal play
-
+                modal.style.display = 'none';
                 if (isMyTurn) {
                     statusText.innerHTML = `You are Player ${myPlayerIndex} (<span class="${myTeamClass}">Team ${myTeamNum}</span>) - YOUR TURN!`;
                     passBtn.style.display = "inline-block";
@@ -254,7 +256,6 @@
                     passBtn.style.display = "none";
                 }
             }
-
             renderHand();
             renderBoard(currentBoard);
         });
@@ -264,7 +265,6 @@
         function renderHand() {
             const handContainer = document.getElementById('hand-container');
             handContainer.innerHTML = '';
-
             myHand.forEach((tile, index) => {
                 const dominoEl = createDominoElement(tile, 'vertical');
                 if (isMyTurn) dominoEl.classList.add('playable');
@@ -275,7 +275,6 @@
                         socket.emit('play_tile', { playerIndex: myPlayerIndex, tileIndex: index, target: 'tail' });
                         return;
                     }
-
                     const [a, b] = tile;
                     const matchesHead = (a === boardEnds.head || b === boardEnds.head);
                     const matchesTail = (a === boardEnds.tail || b === boardEnds.tail);
@@ -294,17 +293,108 @@
             });
         }
 
+        // PERFECTED: 1-Pass Continuous Snaking Engine
         function renderBoard(boardTiles) {
             const boardContainer = document.getElementById('the-board');
+            const scrollContainer = document.getElementById('board-container');
             boardContainer.innerHTML = '';
-            boardTiles.forEach(tile => {
-                boardContainer.appendChild(createDominoElement(tile, 'horizontal'));
+
+            if (boardTiles.length === 0) return;
+
+            const GAP = 4;
+            const ROW_H = 85;
+            const TILES_PER_ROW = 10; // Wrap exactly every 10 tiles
+
+            let positions = [];
+            let cx = 0, cy = 0, dir = 1;
+
+            // PASS 1: Flawless Sequential Coordinate Mapping
+            for (let i = 0; i < boardTiles.length; i++) {
+                let tile = boardTiles[i];
+                let isDouble = (tile[0] === tile[1]);
+                let w = isDouble ? 50 : 100;
+
+                if (i > 0) {
+                    if (i % TILES_PER_ROW === 0) {
+                        // TURN! Drop down, reverse direction.
+                        // Do NOT add a horizontal gap so it aligns perfectly vertical.
+                        cy += ROW_H;
+                        dir *= -1;
+                    } else {
+                        // NORMAL HORIZONTAL MOVE. Add gap before placing tile.
+                        cx += dir * GAP;
+                    }
+                }
+
+                let drawX;
+                let flip;
+                if (dir === 1) {
+                    drawX = cx; // Placed at cursor
+                    cx += w; // Advance cursor to right edge of tile
+                    flip = false;
+                } else {
+                    cx -= w; // Advance cursor to left edge of tile
+                    drawX = cx; // Placed at cursor
+                    flip = true; // Flips pip faces so they connect correctly backwards!
+                }
+
+                positions.push({ tile, x: drawX, y: cy, flip, isDouble });
+            }
+
+            // PASS 2: Calculate Bounds to Center the Entire Shape
+            let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+            positions.forEach(pos => {
+                let w = pos.isDouble ? 50 : 100;
+                let h = pos.isDouble ? 100 : 50;
+
+                if (pos.x < minX) minX = pos.x;
+                if (pos.x + w > maxX) maxX = pos.x + w;
+
+                // Track Y boundaries, accounting for tall double tiles
+                let topY = pos.isDouble ? pos.y - 25 : pos.y;
+                let botY = topY + h;
+
+                if (topY < minY) minY = topY;
+                if (botY > maxY) maxY = botY;
             });
+
+            const containerWidth = Math.max(scrollContainer.clientWidth - 40, 300);
+            const containerHeight = scrollContainer.clientHeight - 40;
+
+            let totalW = maxX - minX;
+            let totalH = maxY - minY;
+
+            // Calculate the exact pixel offsets needed to put the shape in the dead center
+            let offsetX = (containerWidth - totalW) / 2 - minX;
+            let offsetY = Math.max((containerHeight - totalH) / 2 - minY, 20 - minY);
+
+            // PASS 3: Render Tiles
+            positions.forEach(pos => {
+                const dominoEl = createDominoElement(pos.tile, 'horizontal', pos.flip);
+                dominoEl.style.position = 'absolute';
+                dominoEl.style.left = `${pos.x + offsetX}px`;
+
+                let finalY = pos.y + offsetY;
+                if (pos.isDouble) finalY -= 25; // Keep sideways doubles centered horizontally
+
+                dominoEl.style.top = `${finalY}px`;
+                boardContainer.appendChild(dominoEl);
+            });
+
+            // Expand background scrolling area if the snake gets massive
+            boardContainer.style.minHeight = `${totalH + 100}px`;
+            boardContainer.style.minWidth = `${totalW + 40}px`;
         }
 
-        function createDominoElement(tile, orientation = 'vertical') {
+        // The element creator flips the pips visually if the snake is traveling backwards
+        function createDominoElement(tile, orientation = 'vertical', flip = false) {
             const div = document.createElement('div');
             div.className = `domino ${orientation}`;
+
+            if (orientation === 'horizontal' && tile[0] === tile[1]) {
+                div.classList.add('double-tile');
+            }
+
             function createPipFace(num) {
                 const face = document.createElement('div');
                 face.className = 'pip-face';
@@ -318,9 +408,21 @@
                 });
                 return face;
             }
-            div.appendChild(createPipFace(tile[0]));
-            div.appendChild(Object.assign(document.createElement('div'), { className: 'divider' }));
-            div.appendChild(createPipFace(tile[1]));
+
+            // FLIP LOGIC: Visually reverses the pip rendering if the tile is traveling left
+            const topHalf = createPipFace(flip ? tile[1] : tile[0]);
+            const bottomHalf = createPipFace(flip ? tile[0] : tile[1]);
+
+            if (orientation === 'horizontal' && tile[0] === tile[1]) {
+                div.appendChild(topHalf);
+                div.appendChild(Object.assign(document.createElement('div'), { className: 'divider', style: 'width: 80%; height: 2px; margin: 5px 0;' }));
+                div.appendChild(bottomHalf);
+            } else {
+                div.appendChild(topHalf);
+                div.appendChild(Object.assign(document.createElement('div'), { className: 'divider' }));
+                div.appendChild(bottomHalf);
+            }
+
             return div;
         }
 
@@ -328,7 +430,6 @@
             if (isMyTurn) socket.emit('pass_turn', { playerIndex: myPlayerIndex });
         }
 
-        // NEW: Tell the server to start the next game
         function requestNextRound() {
             socket.emit('next_round');
         }
