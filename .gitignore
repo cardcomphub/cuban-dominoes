@@ -1,0 +1,9 @@
+# Ignore temporary system/editor files
+.vs/
+.vscode/
+node_modules/
+android/
+ios/
+dist/
+build/
+*.log
