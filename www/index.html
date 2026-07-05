@@ -399,11 +399,13 @@
     <script src="/socket.io/socket.io.js"></script>
     <script>
         // --- 1. SUPABASE AUTHENTICATION ---
-        const { createClient } = window.supabase;
-        // IMPORTANT: Replace these with your actual Supabase URL and Anon Key
+        // Clean destructuring without re-declaring 'supabase' as a constant
         const supabaseUrl = 'https://zlvqbzhfogwgnohrvouq.supabase.co';
         const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpsdnFiemhmb2d3Z25vaHJ2b3VxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyNzQyNDAsImV4cCI6MjA5ODg1MDI0MH0.AiEu0SsqIramGUw6wNdtye0oovW6pa7veXoH6UQDM9I';
-        const supabase = createClient(supabaseUrl, supabaseKey);
+
+
+        // Explicitly target window.supabase to create the client cleanly
+        const supabase = window.supabase.createClient(supabaseUrl, supabaseKey);
 
         async function checkAuthState() {
             const { data: { session } } = await supabase.auth.getSession();
